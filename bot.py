@@ -52,6 +52,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ------------------ YouTube (memory stream) ------------------
+async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if "(youtube.com" in text or "youtu.be" in text):
+        context.user_data["link"] = text
+        await update.message.reply_text(
+            "🎯 کیفیت مورد نظر را انتخاب کنید:",
+            reply_markup=quality_keyboard()
+        )
+
 async def youtube_stream_upload(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                 link: str, qual: str):
     opts = QUALITY_MAP[qual]
@@ -131,7 +140,7 @@ def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     # YouTube
-    application.add_handler(MessageHandler(filters.Regex(r"(youtube\.com|youtu\.be)") & ~filters.COMMAND, youtube_handler))
+    application.add_handler(MessageHandler(filters.Regex(r"(youtube\.com|youtu\.be)") & ~filters.COMMAND, receive_link))
     # Direct link
     application.add_handler(MessageHandler(filters.Regex(r"^https?://") & ~filters.COMMAND, direct_download))
     # inline keyboard
