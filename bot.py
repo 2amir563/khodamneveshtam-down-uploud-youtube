@@ -1,474 +1,414 @@
 #!/usr/bin/env python3
-"""
-Complete Telegram Download Bot - YouTube + Direct Links
-With File Size Display and Auto-Restart Service
-GitHub: https://github.com/2amir563/khodamneveshtam-down-uploud-youtube
-"""
+# -*- coding: utf-8 -*-
+# Telegram Download/Upload Bot with YouTube Support
+# Created by: 2ami-563
 
 import os
-import io
 import logging
-import tempfile
-import mimetypes
 import asyncio
-import re
-import math
-from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InputFile
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler
 )
+from telegram.constants import ChatAction
 import yt_dlp
-import aiohttp
-import requests
+import re
+import subprocess
+from datetime import datetime
+from typing import Optional, Dict, Any
 
-# Setup logging for systemd
+# تنظیمات لاگ
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('bot.log', encoding='utf-8')
-    ]
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Load environment
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID", "0")
-MAX_SIZE = 2_000_000_000  # 2GB
-CHUNK_SIZE = 512 * 1024   # 512KB
+# توکن بات خود را اینجا قرار دهید
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
-# YouTube quality options
-QUALITIES = {
-    "144": "bestvideo[height<=144]+bestaudio/best[height<=144]",
-    "240": "bestvideo[height<=240]+bestaudio/best[height<=240]",
-    "360": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-    "480": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-    "720": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-    "1440": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
-    "2160": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",
-    "best": "bestvideo+bestaudio/best",
-    "audio": "bestaudio"
-}
+# محدودیت اندازه فایل (MB)
+MAX_FILE_SIZE = 2000  # 2GB برای بات‌های معمولی
 
-QUALITY_LABELS = {
-    "144": "144p",
-    "240": "240p",
-    "360": "360p",
-    "480": "480p",
-    "720": "720p",
-    "1080": "1080p",
-    "1440": "1440p",
-    "2160": "2160p",
-    "best": "🎬 Best",
-    "audio": "🎵 Audio"
-}
+# حالت‌های مکالمه
+SELECT_QUALITY, SELECT_FORMAT = range(2)
 
-def format_file_size(bytes_size):
-    """Format file size to human readable format"""
-    if bytes_size == 0:
-        return "0 B"
+class YouTubeDownloader:
+    """کلاس مدیریت دانلود از یوتیوب"""
     
-    size_names = ("B", "KB", "MB", "GB", "TB")
-    i = int(math.floor(math.log(bytes_size, 1024)))
-    p = math.pow(1024, i)
-    s = round(bytes_size / p, 2)
-    
-    return f"{s} {size_names[i]}"
-
-def get_quality_keyboard():
-    """Create quality selection keyboard"""
-    keyboard = [
-        [InlineKeyboardButton(f"{QUALITY_LABELS['144']}", callback_data="144"),
-         InlineKeyboardButton(f"{QUALITY_LABELS['240']}", callback_data="240")],
-        [InlineKeyboardButton(f"{QUALITY_LABELS['360']}", callback_data="360"),
-         InlineKeyboardButton(f"{QUALITY_LABELS['480']}", callback_data="480")],
-        [InlineKeyboardButton(f"{QUALITY_LABELS['720']}", callback_data="720"),
-         InlineKeyboardButton(f"{QUALITY_LABELS['1080']}", callback_data="1080")],
-        [InlineKeyboardButton(f"{QUALITY_LABELS['1440']}", callback_data="1440"),
-         InlineKeyboardButton(f"{QUALITY_LABELS['2160']}", callback_data="2160")],
-        [InlineKeyboardButton(f"{QUALITY_LABELS['best']}", callback_data="best"),
-         InlineKeyboardButton(f"{QUALITY_LABELS['audio']}", callback_data="audio")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
-    welcome_text = """
-🤖 **Welcome to Download Bot**
-
-**I can download:**
-• YouTube videos (choose from 10 quality options)
-• Any direct download link (http/https)
-
-**How to use:**
-1. Send YouTube link → Choose quality (shows file size)
-2. Send any direct link → Auto download
-
-**Limits:**
-• Max file size: 2GB
-• No files stored on server
-• Shows file size for each quality option
-
-Send me a link to start!
-"""
-    await update.message.reply_text(
-        welcome_text,
-        parse_mode='Markdown',
-        reply_markup=get_quality_keyboard()
-    )
-
-async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle YouTube links - Get available formats with file sizes"""
-    url = update.message.text.strip()
-    
-    if not ("youtube.com" in url or "youtu.be" in url):
-        return
-    
-    message = await update.message.reply_text("🔍 Analyzing video formats...")
-    
-    try:
-        ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': False}
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            context.user_data['youtube_url'] = url
-            context.user_data['video_info'] = info
-            
-            title = info.get('title', 'Unknown')
-            duration_sec = info.get('duration', 0)
-            duration_min = duration_sec // 60
-            
-            formats = info.get('formats', [])
-            quality_sizes = {}
-            
-            for fmt in formats:
-                height = fmt.get('height')
-                filesize = fmt.get('filesize') or fmt.get('filesize_approx')
-                
-                if not height or not filesize:
-                    continue
-                
-                if height <= 144:
-                    quality_key = "144"
-                elif height <= 240:
-                    quality_key = "240"
-                elif height <= 360:
-                    quality_key = "360"
-                elif height <= 480:
-                    quality_key = "480"
-                elif height <= 720:
-                    quality_key = "720"
-                elif height <= 1080:
-                    quality_key = "1080"
-                elif height <= 1440:
-                    quality_key = "1440"
-                elif height <= 2160:
-                    quality_key = "2160"
-                else:
-                    quality_key = "best"
-                
-                if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                    quality_key = "audio"
-                
-                if quality_key not in quality_sizes or filesize < quality_sizes[quality_key]:
-                    quality_sizes[quality_key] = filesize
-            
-            # Estimate for best quality
-            if formats:
-                total_size = 0
-                for fmt in formats:
-                    if fmt.get('vcodec') != 'none' and fmt.get('acodec') != 'none':
-                        filesize = fmt.get('filesize') or fmt.get('filesize_approx')
-                        if filesize and filesize > total_size:
-                            total_size = filesize
-                if total_size > 0:
-                    quality_sizes["best"] = total_size
-            
-            # Create keyboard with sizes
-            keyboard = []
-            quality_order = ["144", "240", "360", "480", "720", "1080", "1440", "2160", "best", "audio"]
-            
-            row = []
-            for quality_key in quality_order:
-                if quality_key in QUALITY_LABELS:
-                    size_est = quality_sizes.get(quality_key)
-                    
-                    if size_est:
-                        size_str = format_file_size(size_est)
-                        if quality_key == "best":
-                            label = f"🎬 Best (~{size_str})"
-                        elif quality_key == "audio":
-                            label = f"🎵 Audio (~{size_str})"
-                        else:
-                            label = f"{QUALITY_LABELS[quality_key]} (~{size_str})"
-                    else:
-                        if quality_key == "best":
-                            label = f"🎬 Best"
-                        elif quality_key == "audio":
-                            label = f"🎵 Audio"
-                        else:
-                            label = f"{QUALITY_LABELS[quality_key]}"
-                    
-                    row.append(InlineKeyboardButton(label, callback_data=quality_key))
-                    
-                    if len(row) == 2:
-                        keyboard.append(row)
-                        row = []
-            
-            if row:
-                keyboard.append(row)
-            
-            custom_keyboard = InlineKeyboardMarkup(keyboard)
-            
-            info_text = f"🎬 **{title}**\n"
-            info_text += f"⏱️ Duration: {duration_min} minutes\n\n"
-            info_text += "📊 **Available qualities (estimated size):**\n"
-            
-            for quality_key in quality_order:
-                if quality_key in quality_sizes:
-                    size_est = quality_sizes[quality_key]
-                    size_str = format_file_size(size_est)
-                    
-                    if quality_key == "best":
-                        info_text += f"• 🎬 Best Quality: ~{size_str}\n"
-                    elif quality_key == "audio":
-                        info_text += f"• 🎵 Audio Only: ~{size_str}\n"
-                    else:
-                        info_text += f"• {QUALITY_LABELS[quality_key]}: ~{size_str}\n"
-            
-            info_text += "\nSelect quality:"
-            
-            await message.edit_text(
-                info_text,
-                parse_mode='Markdown',
-                reply_markup=custom_keyboard
-            )
-            
-    except Exception as e:
-        logger.error(f"YouTube info error: {e}")
-        await message.edit_text(f"❌ Error checking video: {str(e)[:100]}")
-
-async def direct_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle direct download links"""
-    url = update.message.text.strip()
-    
-    if not url.startswith(("http://", "https://")):
-        return
-    
-    if "youtube.com" in url or "youtu.be" in url:
-        return
-    
-    message = await update.message.reply_text("🔍 Checking link...")
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.head(url, allow_redirects=True, timeout=10) as response:
-                if response.status != 200:
-                    await message.edit_text("❌ Link not accessible")
-                    return
-        
-        await message.edit_text("⬇️ Downloading...")
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=60) as response:
-                if response.status != 200:
-                    await message.edit_text("❌ Download failed")
-                    return
-                
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
-                downloaded = 0
-                
-                async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                    if chunk:
-                        temp_file.write(chunk)
-                        downloaded += len(chunk)
-                        if downloaded > MAX_SIZE:
-                            await message.edit_text("❌ File too large (max 2GB)")
-                            temp_file.close()
-                            os.unlink(temp_file.name)
-                            return
-                
-                temp_file.close()
-                
-                filename = url.split('/')[-1].split('?')[0] or "download"
-                content_type = response.headers.get('Content-Type', '')
-                if content_type:
-                    ext = mimetypes.guess_extension(content_type)
-                    if ext and not filename.endswith(ext):
-                        filename += ext
-                
-                size_str = format_file_size(downloaded)
-                
-                with open(temp_file.name, 'rb') as file:
-                    await context.bot.send_document(
-                        chat_id=update.effective_chat.id,
-                        document=file,
-                        filename=filename,
-                        caption=f"✅ **Download Complete**\n📦 Size: {size_str}\n🔗 {url[:50]}...",
-                        parse_mode='Markdown',
-                        read_timeout=300,
-                        write_timeout=300
-                    )
-                
-                os.unlink(temp_file.name)
-                await message.edit_text(f"✅ Upload complete! ({size_str})")
-                
-    except Exception as e:
-        logger.error(f"Direct link error: {e}")
-        await message.edit_text(f"❌ Error: {str(e)[:100]}")
-
-def download_youtube_video(url: str, quality: str):
-    """Download YouTube video"""
-    try:
-        format_str = QUALITIES.get(quality, "best")
-        
-        ydl_opts = {
-            'format': format_str,
+    def __init__(self):
+        self.ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'noplaylist': True,
             'extract_flat': False,
-            'socket_timeout': 30,
+        }
+    
+    def get_video_info(self, url: str) -> Optional[Dict[str, Any]]:
+        """دریافت اطلاعات ویدیو"""
+        try:
+            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                formats = []
+                for f in info.get('formats', []):
+                    if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
+                        formats.append({
+                            'format_id': f['format_id'],
+                            'ext': f['ext'],
+                            'resolution': f.get('resolution', 'N/A'),
+                            'filesize': f.get('filesize', 0),
+                            'quality': f.get('quality', 0),
+                        })
+                
+                return {
+                    'title': info.get('title', 'Unknown'),
+                    'duration': info.get('duration', 0),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'formats': formats,
+                    'webpage_url': info.get('webpage_url', url),
+                }
+        except Exception as e:
+            logger.error(f"Error getting video info: {e}")
+            return None
+    
+    async def download_video(self, url: str, format_id: str, quality: str) -> Optional[str]:
+        """دانلود ویدیو با فرمت و کیفیت مشخص"""
+        try:
+            opts = {
+                'format': f'{format_id}[height<={quality}]' if quality else format_id,
+                'outtmpl': 'downloads/%(title)s.%(ext)s',
+                'quiet': True,
+                'progress_hooks': [self.progress_hook],
+            }
+            
+            os.makedirs('downloads', exist_ok=True)
+            
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                if os.path.exists(filename):
+                    return filename
+                
+                # اگر فایل با پسوند متفاوت باشد
+                for ext in ['mp4', 'webm', 'mkv', 'mp3']:
+                    alt_filename = filename.rsplit('.', 1)[0] + '.' + ext
+                    if os.path.exists(alt_filename):
+                        return alt_filename
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error downloading video: {e}")
+            return None
+    
+    def progress_hook(self, d):
+        """هوک پیشرفت دانلود"""
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', '0%').strip()
+            speed = d.get('_speed_str', 'N/A')
+            logger.info(f"Downloading: {percent} at {speed}")
+
+class TelegramBot:
+    """کلاس اصلی بات تلگرام"""
+    
+    def __init__(self, token: str):
+        self.token = token
+        self.app = Application.builder().token(token).build()
+        self.youtube_dl = YouTubeDownloader()
+        self.user_data = {}
+        
+        self.setup_handlers()
+    
+    def setup_handlers(self):
+        """تنظیم هندلرهای بات"""
+        
+        # هندلر دستور /start
+        start_handler = CommandHandler('start', self.start_command)
+        self.app.add_handler(start_handler)
+        
+        # هندلر دستور /help
+        help_handler = CommandHandler('help', self.help_command)
+        self.app.add_handler(help_handler)
+        
+        # هندلر دستور /download
+        download_handler = CommandHandler('download', self.download_command)
+        self.app.add_handler(download_handler)
+        
+        # هندلر برای لینک‌های یوتیوب
+        youtube_handler = MessageHandler(
+            filters.TEXT & filters.Regex(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/'),
+            self.handle_youtube_link
+        )
+        self.app.add_handler(youtube_handler)
+        
+        # هندلر برای فایل‌های آپلود شده
+        file_handler = MessageHandler(filters.VIDEO | filters.AUDIO | filters.Document.ALL, self.handle_file)
+        self.app.add_handler(file_handler)
+        
+        # هندلر برای متن
+        text_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
+        self.app.add_handler(text_handler)
+        
+        # هندلر خطا
+        self.app.add_error_handler(self.error_handler)
+    
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """دستور /start"""
+        user = update.effective_user
+        welcome_text = f"""
+سلام {user.first_name}!
+به ربات دانلود/آپلود خوش آمدید.
+
+🔹 **قابلیت‌ها:**
+• دانلود از یوتیوب
+• آپلود فایل به تلگرام
+• تبدیل فرمت‌های مختلف
+
+📌 **دستورات:**
+/start - شروع ربات
+/help - راهنمایی
+/download [لینک] - دانلود از یوتیوب
+
+📎 **روش استفاده:**
+1. لینک یوتیوب را بفرستید
+2. کیفیت مورد نظر را انتخاب کنید
+3. فایل دانلود شده برای شما ارسال می‌شود
+
+⚠️ **توجه:** حداکثر سایز فایل: {MAX_FILE_SIZE}MB
+        """
+        await update.message.reply_text(welcome_text, parse_mode='Markdown')
+    
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """دستور /help"""
+        help_text = """
+📖 **راهنمای ربات:**
+
+🔹 **برای دانلود از یوتیوب:**
+1. لینک ویدیو را برای ربات بفرستید
+2. کیفیت مورد نظر را انتخاب کنید
+3. منتظر دانلود و ارسال فایل بمانید
+
+🔹 **برای آپلود فایل:**
+فایل (ویدیو، صدا، سند) را مستقیماً برای ربات بفرستید
+
+🔹 **فرمت‌های پشتیبانی شده:**
+• ویدیو: MP4, MKV, WEBM, AVI
+• صدا: MP3, M4A, WAV, OGG
+• سند: PDF, TXT, DOC, ZIP
+
+⚠️ **محدودیت‌ها:**
+• حداکثر حجم فایل: 2GB
+• مدت زمان ویدیو: حداکثر 4 ساعت
+
+🛠 **پشتیبانی:** @your_support_channel
+        """
+        await update.message.reply_text(help_text)
+    
+    async def download_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """دستور /download"""
+        if not context.args:
+            await update.message.reply_text("⚠️ لطفاً لینک یوتیوب را بعد از دستور وارد کنید.\nمثال: /download https://youtube.com/watch?v=...")
+            return
+        
+        url = context.args[0]
+        await self.process_youtube_url(update, context, url)
+    
+    async def handle_youtube_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """پردازش لینک یوتیوب ارسالی"""
+        url = update.message.text
+        await self.process_youtube_url(update, context, url)
+    
+    async def process_youtube_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+        """پردازش URL یوتیوب"""
+        await update.message.reply_text("🔍 در حال دریافت اطلاعات ویدیو...")
+        
+        # ارسال وضعیت تایپینگ
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.TYPING
+        )
+        
+        # دریافت اطلاعات ویدیو
+        video_info = self.youtube_dl.get_video_info(url)
+        
+        if not video_info:
+            await update.message.reply_text("❌ خطا در دریافت اطلاعات ویدیو. لطفاً لینک را بررسی کنید.")
+            return
+        
+        # ذخیره اطلاعات برای کاربر
+        user_id = update.effective_user.id
+        self.user_data[user_id] = {
+            'youtube_url': url,
+            'video_info': video_info,
+            'last_interaction': datetime.now()
         }
         
-        if quality == 'audio':
-            ydl_opts.update({
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'm4a',
-                    'preferredquality': '192',
-                }],
-                'outtmpl': '%(title)s.%(ext)s',
-            })
-        else:
-            ydl_opts.update({
-                'merge_output_format': 'mp4',
-                'outtmpl': '%(title)s.%(ext)s',
-            })
+        # نمایش اطلاعات ویدیو و گزینه‌های کیفیت
+        title = video_info['title'][:100] + "..." if len(video_info['title']) > 100 else video_info['title']
+        duration = video_info['duration']
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Unknown')
+        # محاسبه مدت زمان
+        if duration > 0:
+            hours = duration // 3600
+            minutes = (duration % 3600) // 60
+            seconds = duration % 60
+            duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours > 0 else f"{minutes:02d}:{seconds:02d}"
+        else:
+            duration_str = "نامشخص"
+        
+        # ایجاد گزینه‌های کیفیت
+        formats = video_info['formats'][:10]  # حداکثر 10 فرمت
+        
+        if not formats:
+            await update.message.reply_text("❌ هیچ فرمت مناسبی برای این ویدیو یافت نشد.")
+            return
+        
+        # ساخت کیبورد برای انتخاب کیفیت
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        
+        keyboard = []
+        for fmt in formats:
+            quality = fmt.get('resolution', 'N/A')
+            ext = fmt.get('ext', 'mp4').upper()
+            size = fmt.get('filesize', 0)
             
-            with tempfile.TemporaryDirectory() as tmpdir:
-                ydl_opts['outtmpl'] = os.path.join(tmpdir, '%(title)s.%(ext)s')
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
-                    result = ydl2.extract_info(url, download=True)
-                    
-                    if 'entries' in result:
-                        result = result['entries'][0]
-                    
-                    filename = ydl2.prepare_filename(result)
-                    
-                    if not os.path.exists(filename):
-                        files = [f for f in os.listdir(tmpdir) if not f.endswith('.part')]
-                        if files:
-                            filename = os.path.join(tmpdir, files[0])
-                        else:
-                            return None, "File not found"
-                    
-                    buffer = io.BytesIO()
-                    with open(filename, 'rb') as f:
-                        buffer.write(f.read())
-                    
-                    buffer.seek(0)
-                    file_size = buffer.getbuffer().nbytes
-                    
-                    clean_title = re.sub(r'[<>:"/\\|?*]', '_', title)[:50]
-                    final_filename = f"{clean_title} - {quality}p.mp4" if quality != 'audio' else f"{clean_title} - audio.m4a"
-                    
-                    return buffer, final_filename, title, file_size
-                    
-    except Exception as e:
-        logger.error(f"YouTube download error: {e}")
-        return None, f"Error: {str(e)[:100]}"
+            if size > 0:
+                size_mb = size / (1024 * 1024)
+                size_str = f"{size_mb:.1f}MB"
+            else:
+                size_str = "نامشخص"
+            
+            btn_text = f"{quality} ({ext}) - {size_str}"
+            callback_data = f"format_{fmt['format_id']}_{quality.split('x')[1] if 'x' in quality else '720'}"
+            
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
+        
+        # اضافه کردن دکمه کنسل
+        keyboard.append([InlineKeyboardButton("❌ لغو", callback_data="cancel")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        info_text = f"""
+🎬 **{title}**
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle quality selection"""
-    query = update.callback_query
-    await query.answer()
-    
-    quality = query.data
-    url = context.user_data.get('youtube_url')
-    
-    if not url:
-        await query.edit_message_text("❌ Send YouTube link first!")
-        return
-    
-    quality_label = QUALITY_LABELS.get(quality, quality)
-    await query.edit_message_text(f"⬇️ Downloading {quality_label}...")
-    
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, download_youtube_video, url, quality)
-    
-    if result[0] is None:
-        await query.edit_message_text(f"❌ {result[1]}")
-        return
-    
-    buffer, filename, title, file_size = result
-    
-    if file_size > MAX_SIZE:
-        await query.edit_message_text("❌ Video too large (max 2GB)")
-        buffer.close()
-        return
-    
-    size_str = format_file_size(file_size)
-    
-    buffer.seek(0)
-    try:
-        await context.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=buffer,
-            filename=filename,
-            caption=f"✅ **{title}**\n🎯 Quality: {quality_label}\n📦 Size: {size_str}",
-            parse_mode='Markdown',
-            read_timeout=300,
-            write_timeout=300
-        )
-        await query.edit_message_text(f"✅ Upload complete! ({size_str})")
-    except Exception as e:
-        await query.edit_message_text(f"❌ Upload error: {str(e)[:100]}")
-    finally:
-        buffer.close()
+⏱ مدت زمان: {duration_str}
 
+📊 **لطفاً کیفیت مورد نظر را انتخاب کنید:**
+        """
+        
+        await update.message.reply_text(info_text, reply_markup=reply_markup)
+    
+    async def handle_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """پردازش فایل آپلود شده"""
+        try:
+            file = None
+            
+            if update.message.video:
+                file = update.message.video
+            elif update.message.audio:
+                file = update.message.audio
+            elif update.message.document:
+                file = update.message.document
+            elif update.message.voice:
+                file = update.message.voice
+            
+            if not file:
+                await update.message.reply_text("❌ نوع فایل شناسایی نشد.")
+                return
+            
+            # دریافت اطلاعات فایل
+            file_size = file.file_size or 0
+            file_name = file.file_name or "unknown"
+            
+            if file_size > MAX_FILE_SIZE * 1024 * 1024:
+                await update.message.reply_text(f"⚠️ حجم فایل ({file_size/(1024*1024):.1f}MB) از حد مجاز ({MAX_FILE_SIZE}MB) بیشتر است.")
+                return
+            
+            await update.message.reply_text(f"""
+📁 **فایل دریافت شد:**
+
+📛 نام: {file_name}
+📦 حجم: {file_size/(1024*1024):.1f}MB
+✅ فایل با موفقیت دریافت شد.
+
+📤 در صورت نیاز می‌توانید فایل را برای دیگران فوروارد کنید.
+            """)
+            
+        except Exception as e:
+            logger.error(f"Error handling file: {e}")
+            await update.message.reply_text("❌ خطا در پردازش فایل.")
+    
+    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """پردازش متن"""
+        text = update.message.text
+        
+        if text.startswith('http'):
+            await update.message.reply_text("🔗 لینک دریافت شد. اگر لینک یوتیوب است، به زودی پردازش می‌شود.")
+        else:
+            await update.message.reply_text(f"📝 متن شما: {text}\n\nبرای دانلود، لینک یوتیوب را ارسال کنید.")
+    
+    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """مدیریت خطاها"""
+        logger.error(f"Update {update} caused error {context.error}")
+        
+        try:
+            if update and update.effective_message:
+                await update.effective_message.reply_text(
+                    "❌ خطایی رخ داده است. لطفاً دوباره تلاش کنید."
+                )
+        except:
+            pass
+    
+    def run(self):
+        """اجرای بات"""
+        logger.info("🤖 ربات در حال راه‌اندازی...")
+        
+        # اجرای بات
+        self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+        
+        logger.info("🛑 ربات متوقف شد.")
+
+# تابع اصلی
 def main():
-    """Start the bot"""
-    if not TOKEN:
-        logger.error("❌ ERROR: BOT_TOKEN not found in .env file!")
-        print("Please edit .env file: nano ~/telegram-download-bot/.env")
+    """تابع اصلی اجرای برنامه"""
+    
+    print("""
+    ====================================
+      Telegram Download/Upload Bot
+           با پشتیبانی یوتیوب
+    ====================================
+    
+    ✨ در حال راه‌اندازی ربات...
+    
+    📌 نکات:
+    1. توکن بات را در فایل تنظیم کنید
+    2. از پایداری اینترنت اطمینان حاصل کنید
+    3. برای توقف، Ctrl+C بزنید
+    
+    """)
+    
+    # بررسی وجود توکن
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("❌ لطفاً ابتدا توکن بات را در متغیر BOT_TOKEN قرار دهید.")
+        print("📝 راهنما: به @BotFather در تلگرام مراجعه کنید و بات جدید بسازید.")
         return
     
-    app = Application.builder().token(TOKEN).build()
+    # ایجاد دایرکتوری دانلود
+    os.makedirs('downloads', exist_ok=True)
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r'(youtube\.com|youtu\.be)') & ~filters.COMMAND,
-        youtube_handler
-    ))
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r'^https?://') & 
-        ~filters.Regex(r'youtube\.com|youtu\.be') & 
-        ~filters.COMMAND,
-        direct_link_handler
-    ))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    # ایجاد و اجرای بات
+    bot = TelegramBot(BOT_TOKEN)
     
-    logger.info("🤖 Bot starting...")
-    print("=" * 50)
-    print("Telegram Download Bot Started!")
-    print(f"Service: telegram-download-bot")
-    print("Check logs: sudo journalctl -u telegram-download-bot -f")
-    print("=" * 50)
-    
-    app.run_polling(drop_pending_updates=True)
+    try:
+        bot.run()
+    except KeyboardInterrupt:
+        print("\n\n🛑 ربات به درخواست کاربر متوقف شد.")
+    except Exception as e:
+        print(f"❌ خطای غیرمنتظره: {e}")
 
 if __name__ == "__main__":
     main()
