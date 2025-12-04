@@ -2,14 +2,13 @@
 """
 YouTube & Direct-Link Telegram Bot
 Memory-Only Stream  |  systemd service  |  Port none (polling)
-Repo: https://github.com/2amir563/khodamneveshtam-down-uploud-youtube
+Repo: https://github.com/2amir563/khodamneveshtam-down-uploud-youtube 
 """
 import os
 import io
 import logging
 import requests
 import mimetypes
-from urllib.parse import urlparse
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -132,7 +131,7 @@ def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     # YouTube
-    application.add_handler(MessageHandler(filters.Regex(r"(youtube\.com|youtu\.be)") & ~filters.COMMAND, receive_link))
+    application.add_handler(MessageHandler(filters.Regex(r"(youtube\.com|youtu\.be)") & ~filters.COMMAND, youtube_handler))
     # Direct link
     application.add_handler(MessageHandler(filters.Regex(r"^https?://") & ~filters.COMMAND, direct_download))
     # inline keyboard
