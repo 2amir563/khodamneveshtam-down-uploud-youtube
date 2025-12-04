@@ -105,7 +105,7 @@ async def direct_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename = f"file{ext}"
             await context.bot.send_document(
                 chat_id=update.effective_chat.id,
-                document=r.iter_content(chunk_size=CHUNK_SIZE),
+                document=r.iter_content(chunk_size=CHUNK),
                 filename=filename,
                 caption=f"✅ دانلود شد\n🔗 {url}",
                 read_timeout=120, write_timeout=120, connect_timeout=120
