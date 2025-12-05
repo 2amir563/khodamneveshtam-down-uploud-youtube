@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple Telegram Download Bot - YouTube + Direct Links
-NO FFMPEG REQUIRED - Uses MP4 formats only
+Complete Telegram Download Bot - YouTube + Direct Links
+With File Size Display for Each Quality
 GitHub: https://github.com/2amir563/khodamneveshtam-down-uploud-youtube
 """
 
@@ -20,6 +20,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 import yt_dlp
+import aiohttp
 import requests
 
 load_dotenv()
@@ -34,25 +35,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# YouTube quality options - ONLY SINGLE FILE FORMATS (no merging)
+# YouTube quality options - Complete list
 QUALITIES = {
-    "144": "best[height<=144][ext=mp4]/best[height<=144]/worst[height<=144]",
-    "240": "best[height<=240][ext=mp4]/best[height<=240]/worst[height<=240]",
-    "360": "best[height<=360][ext=mp4]/best[height<=360]/worst[height<=360]",
-    "480": "best[height<=480][ext=mp4]/best[height<=480]/worst[height<=480]",
-    "720": "best[height<=720][ext=mp4]/best[height<=720]/worst[height<=720]",
-    "1080": "best[height<=1080][ext=mp4]/best[height<=1080]/worst[height<=1080]",
-    "audio": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio"
+    "144": "bestvideo[height<=144]+bestaudio/best[height<=144]",
+    "240": "bestvideo[height<=240]+bestaudio/best[height<=240]",
+    "360": "bestvideo[height<=360]+bestaudio/best[height<=360]",
+    "480": "bestvideo[height<=480]+bestaudio/best[height<=480]",
+    "720": "bestvideo[height<=720]+bestaudio/best[height<=720]",
+    "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+    "1440": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
+    "2160": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",
+    "best": "bestvideo+bestaudio/best",
+    "audio": "bestaudio"
 }
 
 QUALITY_LABELS = {
-    "144": "144p (MP4)",
-    "240": "240p (MP4)",
-    "360": "360p (MP4)",
-    "480": "480p (MP4)",
-    "720": "720p (MP4)",
-    "1080": "1080p (MP4)",
-    "audio": "🎵 Audio (M4A)"
+    "144": "144p",
+    "240": "240p",
+    "360": "360p",
+    "480": "480p",
+    "720": "720p",
+    "1080": "1080p",
+    "1440": "1440p",
+    "2160": "2160p",
+    "best": "🎬 Best",
+    "audio": "🎵 Audio"
 }
 
 def format_file_size(bytes_size):
@@ -67,67 +74,69 @@ def format_file_size(bytes_size):
     
     return f"{s} {size_names[i]}"
 
+def get_quality_keyboard():
+    """Create quality selection keyboard with all options"""
+    keyboard = [
+        [InlineKeyboardButton(f"{QUALITY_LABELS['144']}", callback_data="144"),
+         InlineKeyboardButton(f"{QUALITY_LABELS['240']}", callback_data="240")],
+        [InlineKeyboardButton(f"{QUALITY_LABELS['360']}", callback_data="360"),
+         InlineKeyboardButton(f"{QUALITY_LABELS['480']}", callback_data="480")],
+        [InlineKeyboardButton(f"{QUALITY_LABELS['720']}", callback_data="720"),
+         InlineKeyboardButton(f"{QUALITY_LABELS['1080']}", callback_data="1080")],
+        [InlineKeyboardButton(f"{QUALITY_LABELS['1440']}", callback_data="1440"),
+         InlineKeyboardButton(f"{QUALITY_LABELS['2160']}", callback_data="2160")],
+        [InlineKeyboardButton(f"{QUALITY_LABELS['best']}", callback_data="best"),
+         InlineKeyboardButton(f"{QUALITY_LABELS['audio']}", callback_data="audio")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     welcome_text = """
-🤖 **Welcome to Simple Download Bot**
+🤖 **Welcome to Download Bot**
 
 **I can download:**
-• YouTube videos (7 quality options)
+• YouTube videos (choose from 10 quality options)
 • Any direct download link (http/https)
 
-**Features:**
-• No ffmpeg required
-• Shows file size before download
-• Max file size: 2GB
-• Files are not stored on server
-
 **How to use:**
-1. Send YouTube link → Choose quality
+1. Send YouTube link → Choose quality (shows file size)
 2. Send any direct link → Auto download
+
+**Limits:**
+• Max file size: 2GB
+• No files stored on server
+• Shows file size for each quality option
 
 Send me a link to start!
 """
-    
-    keyboard = [
-        [InlineKeyboardButton("144p", callback_data="144"),
-         InlineKeyboardButton("240p", callback_data="240")],
-        [InlineKeyboardButton("360p", callback_data="360"),
-         InlineKeyboardButton("480p", callback_data="480")],
-        [InlineKeyboardButton("720p", callback_data="720"),
-         InlineKeyboardButton("1080p", callback_data="1080")],
-        [InlineKeyboardButton("🎵 Audio", callback_data="audio")]
-    ]
-    
     await update.message.reply_text(
         welcome_text,
         parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=get_quality_keyboard()
     )
 
 async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle YouTube links - Get available formats"""
+    """Handle YouTube links - Get available formats with file sizes"""
     url = update.message.text.strip()
     
     if not ("youtube.com" in url or "youtu.be" in url):
         return
     
-    message = await update.message.reply_text("🔍 Checking video...")
+    message = await update.message.reply_text("🔍 Analyzing video formats...")
     
     try:
-        # Get video info - ONLY SINGLE FILE FORMATS
+        # Get video info with all formats
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
-            'no_color': True,
-            'format': 'best[ext=mp4]/best'  # Only MP4 formats
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            # Store URL for later use
+            # Store URL and info for later use
             context.user_data['youtube_url'] = url
             context.user_data['video_info'] = info
             
@@ -135,137 +144,178 @@ async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             duration_sec = info.get('duration', 0)
             duration_min = duration_sec // 60
             
-            # Get available formats
+            # Get all formats with their file sizes
             formats = info.get('formats', [])
             
-            # Find sizes for each quality
+            # Group formats by resolution/quality
             quality_sizes = {}
             
             for fmt in formats:
-                # Skip formats that are not complete (video+audio in one file)
-                if fmt.get('vcodec') != 'none' and fmt.get('acodec') != 'none':
-                    height = fmt.get('height')
-                    filesize = fmt.get('filesize') or fmt.get('filesize_approx')
-                    ext = fmt.get('ext', '')
-                    
-                    # Only use MP4 or M4A files
-                    if ext not in ['mp4', 'm4a', 'webm']:
-                        continue
-                    
-                    if height:
-                        if height <= 144:
-                            quality_key = "144"
-                        elif height <= 240:
-                            quality_key = "240"
-                        elif height <= 360:
-                            quality_key = "360"
-                        elif height <= 480:
-                            quality_key = "480"
-                        elif height <= 720:
-                            quality_key = "720"
-                        elif height <= 1080:
-                            quality_key = "1080"
-                        else:
-                            continue
-                    elif fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                        quality_key = "audio"
-                    else:
-                        continue
-                    
-                    # Store size
+                # Get format info
+                height = fmt.get('height')
+                format_note = fmt.get('format_note', '')
+                filesize = fmt.get('filesize') or fmt.get('filesize_approx')
+                
+                if not height:
+                    continue
+                
+                # Map height to our quality keys
+                if height <= 144:
+                    quality_key = "144"
+                elif height <= 240:
+                    quality_key = "240"
+                elif height <= 360:
+                    quality_key = "360"
+                elif height <= 480:
+                    quality_key = "480"
+                elif height <= 720:
+                    quality_key = "720"
+                elif height <= 1080:
+                    quality_key = "1080"
+                elif height <= 1440:
+                    quality_key = "1440"
+                elif height <= 2160:
+                    quality_key = "2160"
+                else:
+                    quality_key = "best"
+                
+                # For audio formats
+                if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
+                    quality_key = "audio"
+                
+                # Store the smallest file size for this quality (for estimation)
+                if quality_key not in quality_sizes or (filesize and filesize < quality_sizes[quality_key]):
                     if filesize:
                         quality_sizes[quality_key] = filesize
             
-            # Create keyboard with available qualities
+            # Also estimate size for "best" quality
+            if formats:
+                total_size = 0
+                # Try to find a format with both video and audio
+                for fmt in formats:
+                    if fmt.get('vcodec') != 'none' and fmt.get('acodec') != 'none':
+                        filesize = fmt.get('filesize') or fmt.get('filesize_approx')
+                        if filesize and filesize > total_size:
+                            total_size = filesize
+                if total_size > 0:
+                    quality_sizes["best"] = total_size
+            
+            # Create keyboard with size information
             keyboard = []
-            available_qualities = []
             
-            # Check which qualities are available
-            for quality in ["144", "240", "360", "480", "720", "1080", "audio"]:
-                if quality in quality_sizes:
-                    available_qualities.append(quality)
+            # Define quality order
+            quality_order = ["144", "240", "360", "480", "720", "1080", "1440", "2160", "best", "audio"]
             
-            # Create keyboard rows
             row = []
-            for quality in available_qualities:
-                if quality == "audio":
-                    label = "🎵 Audio"
-                else:
-                    label = f"{quality}p"
-                
-                row.append(InlineKeyboardButton(label, callback_data=quality))
-                
-                if len(row) == 2:
-                    keyboard.append(row)
-                    row = []
+            for quality_key in quality_order:
+                if quality_key in QUALITY_LABELS:
+                    # Get estimated size for this quality
+                    size_est = quality_sizes.get(quality_key)
+                    
+                    if size_est:
+                        # Format size
+                        size_str = format_file_size(size_est)
+                        
+                        # Create button label with size
+                        if quality_key == "best":
+                            label = f"🎬 Best (~{size_str})"
+                        elif quality_key == "audio":
+                            label = f"🎵 Audio (~{size_str})"
+                        else:
+                            label = f"{QUALITY_LABELS[quality_key]} (~{size_str})"
+                    else:
+                        # No size estimate available
+                        if quality_key == "best":
+                            label = f"🎬 Best (Unknown size)"
+                        elif quality_key == "audio":
+                            label = f"🎵 Audio (Unknown size)"
+                        else:
+                            label = f"{QUALITY_LABELS[quality_key]} (Unknown size)"
+                    
+                    row.append(InlineKeyboardButton(label, callback_data=quality_key))
+                    
+                    if len(row) == 2:
+                        keyboard.append(row)
+                        row = []
             
-            if row:
+            if row:  # Add remaining buttons
                 keyboard.append(row)
             
-            if not keyboard:
-                await message.edit_text("❌ No downloadable formats found for this video")
-                return
+            custom_keyboard = InlineKeyboardMarkup(keyboard)
             
-            # Create info text
+            # Show video info with estimated sizes
             info_text = f"🎬 **{title}**\n"
             info_text += f"⏱️ Duration: {duration_min} minutes\n\n"
-            info_text += "📊 **Available qualities:**\n"
+            info_text += "📊 **Available qualities (estimated size):**\n"
             
-            for quality in available_qualities:
-                size = quality_sizes.get(quality)
-                if size:
-                    size_str = format_file_size(size)
-                    if quality == "audio":
-                        info_text += f"• 🎵 Audio: {size_str}\n"
+            # Add size information for available qualities
+            for quality_key in quality_order:
+                if quality_key in quality_sizes:
+                    size_est = quality_sizes[quality_key]
+                    size_str = format_file_size(size_est)
+                    
+                    if quality_key == "best":
+                        info_text += f"• 🎬 Best Quality: ~{size_str}\n"
+                    elif quality_key == "audio":
+                        info_text += f"• 🎵 Audio Only: ~{size_str}\n"
                     else:
-                        info_text += f"• {quality}p: {size_str}\n"
-                else:
-                    if quality == "audio":
-                        info_text += f"• 🎵 Audio (size unknown)\n"
-                    else:
-                        info_text += f"• {quality}p (size unknown)\n"
+                        info_text += f"• {QUALITY_LABELS[quality_key]}: ~{size_str}\n"
             
             info_text += "\nSelect quality:"
             
             await message.edit_text(
                 info_text,
                 parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                reply_markup=custom_keyboard
             )
             
     except Exception as e:
         logger.error(f"YouTube info error: {e}")
-        await message.edit_text(f"❌ Error: {str(e)[:100]}")
+        await message.edit_text(f"❌ Error checking video: {str(e)[:100]}")
 
 async def direct_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle direct download links"""
+    """Handle direct download links (NOT YouTube)"""
     url = update.message.text.strip()
     
-    if not url.startswith(("http://", "https://")) or "youtube.com" in url or "youtu.be" in url:
+    # Skip if not a valid URL
+    if not url.startswith(("http://", "https://")):
+        return
+    
+    # Skip YouTube links (they should go to youtube_handler)
+    if "youtube.com" in url or "youtu.be" in url:
         return
     
     message = await update.message.reply_text("🔍 Checking link...")
     
     try:
-        # Check if file exists
-        head_response = requests.head(url, allow_redirects=True, timeout=10)
-        if head_response.status_code != 200:
-            await message.edit_text("❌ Link not accessible")
-            return
-        
-        content_length = head_response.headers.get('Content-Length')
-        if content_length:
-            file_size = int(content_length)
-            if file_size > MAX_SIZE:
-                await message.edit_text("❌ File too large (max 2GB)")
+        # First check if file exists and get size
+        try:
+            head_response = requests.head(url, allow_redirects=True, timeout=10)
+            if head_response.status_code != 200:
+                await message.edit_text("❌ Link not accessible")
                 return
+            
+            # Check content length
+            content_length = head_response.headers.get('Content-Length')
+            if content_length:
+                file_size = int(content_length)
+                if file_size > MAX_SIZE:
+                    await message.edit_text("❌ File too large (max 2GB)")
+                    return
+                elif file_size == 0:
+                    await message.edit_text("❌ File is empty")
+                    return
+        except Exception as e:
+            logger.warning(f"HEAD request failed: {e}")
+            # Continue with GET request
         
         await message.edit_text("⬇️ Downloading...")
         
-        # Download file
+        # Download the file with progress tracking
         response = requests.get(url, stream=True, timeout=60)
         response.raise_for_status()
         
+        # Create temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
         total_size = 0
         
@@ -275,6 +325,7 @@ async def direct_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     temp_file.write(chunk)
                     total_size += len(chunk)
                     
+                    # Check size during download
                     if total_size > MAX_SIZE:
                         await message.edit_text("❌ File too large (max 2GB)")
                         temp_file.close()
@@ -283,32 +334,52 @@ async def direct_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             temp_file.close()
             
-            # Get filename
+            # Get filename with better extraction
             filename = None
+            
+            # Try to get from Content-Disposition header
             content_disposition = response.headers.get('Content-Disposition', '')
-            
             if content_disposition:
-                match = re.search(r'filename=["\']?([^"\']+)["\']?', content_disposition)
-                if match:
-                    filename = match.group(1)
+                # Try UTF-8 encoded filename first
+                utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition)
+                if utf8_match:
+                    import urllib.parse
+                    filename = urllib.parse.unquote(utf8_match.group(1))
+                else:
+                    # Try regular filename
+                    regular_match = re.search(r'filename=["\']?([^"\']+)["\']?', content_disposition)
+                    if regular_match:
+                        filename = regular_match.group(1)
             
+            # If not found in header, extract from URL
             if not filename:
-                path_part = url.split('?')[0]
+                # Extract the last part of URL
+                path_part = url.split('?')[0]  # Remove query parameters
                 filename = os.path.basename(path_part)
-                if not filename or '.' not in filename:
+                
+                if not filename or filename == '' or '.' not in filename:
                     filename = "download_file"
             
             # Clean filename
             filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
             
-            # Add extension if missing
+            # Add proper extension if missing
             content_type = response.headers.get('Content-Type', '')
             if content_type:
                 ext = mimetypes.guess_extension(content_type)
-                if ext and '.' not in filename:
-                    filename = filename + ext
+                if ext:
+                    # Don't add extension if already has one
+                    if '.' not in filename:
+                        filename = filename + ext
+                    else:
+                        # Check if existing extension matches content type
+                        existing_ext = os.path.splitext(filename)[1].lower()
+                        if existing_ext != ext.lower():
+                            # Replace extension
+                            name_part = os.path.splitext(filename)[0]
+                            filename = name_part + ext
             
-            # Format size
+            # Format size for display
             size_str = format_file_size(total_size)
             
             # Send to Telegram
@@ -319,84 +390,141 @@ async def direct_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     filename=filename,
                     caption=f"✅ **Download Complete**\n"
                            f"📁 File: `{filename}`\n"
-                           f"📦 Size: {size_str}",
-                    parse_mode='Markdown'
+                           f"📦 Size: {size_str}\n"
+                           f"🔗 Source: {url[:50]}...",
+                    parse_mode='Markdown',
+                    read_timeout=300,
+                    write_timeout=300,
+                    connect_timeout=300
                 )
             
             await message.edit_text(f"✅ Upload complete! ({size_str})")
             
         finally:
+            # Clean up temp file
             if os.path.exists(temp_file.name):
                 os.unlink(temp_file.name)
                 
+    except requests.exceptions.Timeout:
+        await message.edit_text("❌ Connection timeout")
+    except requests.exceptions.RequestException as e:
+        await message.edit_text(f"❌ Download failed: {str(e)[:100]}")
     except Exception as e:
         logger.error(f"Direct link error: {e}")
         await message.edit_text(f"❌ Error: {str(e)[:100]}")
 
-def download_youtube_simple(url: str, quality: str):
-    """Simple YouTube download - NO MERGING REQUIRED"""
+def download_youtube_video(url: str, quality: str):
+    """Download YouTube video with selected quality"""
     try:
-        # Format selection - ONLY single file formats
-        if quality == "audio":
-            format_str = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio"
-        else:
-            height = quality
-            format_str = f"best[height<={height}][ext=mp4]/best[height<={height}]/worst[height<={height}]"
+        # Get format string
+        format_str = QUALITIES.get(quality, "best")
         
         ydl_opts = {
             'format': format_str,
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
+            'extract_flat': False,
+            'socket_timeout': 30,
             'no_color': True,
-            # CRITICAL: Disable all post-processing
-            'postprocessors': [],
-            'merge_output_format': None,
-            'outtmpl': '%(title)s.%(ext)s',
         }
         
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ydl_opts['outtmpl'] = os.path.join(tmpdir, '%(title)s.%(ext)s')
+        # Add postprocessor for audio
+        if quality == 'audio':
+            ydl_opts.update({
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'm4a',
+                    'preferredquality': '192',
+                }],
+                'outtmpl': '%(title)s.%(ext)s',
+            })
+        else:
+            ydl_opts.update({
+                'merge_output_format': 'mp4',
+                'outtmpl': '%(title)s.%(ext)s',
+            })
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Get video info first
+            info = ydl.extract_info(url, download=False)
+            title = info.get('title', 'Unknown Video')
+            video_id = info.get('id', 'unknown')
+            duration = info.get('duration', 0)
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                title = info.get('title', 'Video')
+            # Clean title for filename
+            clean_title = re.sub(r'[<>:"/\\|?*]', '_', title)
+            clean_title = clean_title[:100]  # Limit length
+            
+            # Download to temp directory
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ydl_opts['outtmpl'] = os.path.join(tmpdir, f'{clean_title}.%(ext)s')
                 
-                # Clean title for filename
-                clean_title = re.sub(r'[<>:"/\\|?*]', '_', title)[:50]
-                
-                # Find the downloaded file
-                downloaded_file = None
-                for file in os.listdir(tmpdir):
-                    if not file.endswith('.part'):
-                        downloaded_file = os.path.join(tmpdir, file)
-                        break
-                
-                if not downloaded_file:
-                    return None, "No file downloaded"
-                
-                # Read file into buffer
-                with open(downloaded_file, 'rb') as f:
-                    file_content = f.read()
-                
-                buffer = io.BytesIO(file_content)
-                file_size = len(file_content)
-                
-                # Create final filename
-                ext = os.path.splitext(downloaded_file)[1]
-                if quality == "audio":
-                    final_filename = f"{clean_title} - Audio.m4a"
-                else:
-                    final_filename = f"{clean_title} - {quality}p.mp4"
-                
-                return buffer, final_filename, title, file_size
-                
+                # Download the video
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl_downloader:
+                    result = ydl_downloader.extract_info(url, download=True)
+                    
+                    # Handle playlists (shouldn't happen with noplaylist=True)
+                    if 'entries' in result:
+                        result = result['entries'][0]
+                    
+                    # Get the downloaded filename
+                    filename = ydl_downloader.prepare_filename(result)
+                    
+                    # For audio, the filename might have different extension
+                    if quality == 'audio' and not os.path.exists(filename):
+                        # Look for audio files
+                        for ext in ['.m4a', '.mp3', '.opus', '.webm']:
+                            possible_file = filename.rsplit('.', 1)[0] + ext
+                            if os.path.exists(possible_file):
+                                filename = possible_file
+                                break
+                    
+                    # Check if file exists
+                    if not os.path.exists(filename):
+                        # Search for any downloaded file
+                        downloaded_files = [f for f in os.listdir(tmpdir) 
+                                          if not f.endswith('.part') and f.endswith(('.mp4', '.m4a', '.webm', '.mkv'))]
+                        if downloaded_files:
+                            filename = os.path.join(tmpdir, downloaded_files[0])
+                        else:
+                            return None, "File not found after download"
+                    
+                    # Read file into buffer
+                    buffer = io.BytesIO()
+                    with open(filename, 'rb') as f:
+                        buffer.write(f.read())
+                    
+                    buffer.seek(0)
+                    
+                    # Get file size and extension
+                    file_size = buffer.getbuffer().nbytes
+                    file_ext = os.path.splitext(filename)[1].lower()
+                    if not file_ext:
+                        file_ext = '.mp4' if quality != 'audio' else '.m4a'
+                    
+                    # Create nice filename for Telegram
+                    if quality == 'audio':
+                        display_quality = "Audio"
+                        final_ext = '.m4a'
+                    else:
+                        display_quality = f"{quality}p"
+                        final_ext = '.mp4'
+                    
+                    final_filename = f"{clean_title[:50]} - {display_quality}{final_ext}"
+                    
+                    return buffer, final_filename, title, file_size
+                    
+    except yt_dlp.utils.DownloadError as e:
+        logger.error(f"YouTube download error: {e}")
+        return None, f"YouTube download failed: {str(e)[:100]}"
     except Exception as e:
-        logger.error(f"Download error: {e}")
-        return None, f"Download failed: {str(e)}"
+        logger.error(f"YouTube processing error: {e}")
+        return None, f"Error: {str(e)[:100]}"
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle quality selection"""
+    """Handle YouTube quality selection"""
     query = update.callback_query
     await query.answer()
     
@@ -404,15 +532,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = context.user_data.get('youtube_url')
     
     if not url:
-        await query.edit_message_text("❌ Please send a YouTube link first")
+        await query.edit_message_text("❌ Send YouTube link first!")
         return
     
-    await query.edit_message_text(f"⬇️ Downloading {quality}p...")
+    # Get quality label
+    quality_label = QUALITY_LABELS.get(quality, quality)
+    
+    await query.edit_message_text(f"⬇️ Downloading {quality_label}...")
     
     try:
-        # Download video
+        # Download in background thread
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, download_youtube_simple, url, quality)
+        result = await loop.run_in_executor(None, download_youtube_video, url, quality)
         
         if result[0] is None:
             error_msg = result[1]
@@ -427,6 +558,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buffer.close()
             return
         
+        # Format size for display
         size_str = format_file_size(file_size)
         
         # Send to Telegram
@@ -437,9 +569,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 document=buffer,
                 filename=filename,
                 caption=f"✅ **{title}**\n"
+                       f"🎯 Quality: {quality_label}\n"
                        f"📦 Size: {size_str}\n"
-                       f"🎯 Quality: {quality}p",
-                parse_mode='Markdown'
+                       f"📥 Source: YouTube",
+                parse_mode='Markdown',
+                read_timeout=300,
+                write_timeout=300,
+                connect_timeout=300
             )
             await query.edit_message_text(f"✅ Upload complete! ({size_str})")
         except Exception as e:
@@ -448,45 +584,61 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buffer.close()
             
     except Exception as e:
-        logger.error(f"Button error: {e}")
+        logger.error(f"Button handler error: {e}")
         await query.edit_message_text(f"❌ Error: {str(e)[:100]}")
 
 def main():
-    """Main function"""
+    """Main function to start the bot"""
     if not TOKEN:
-        print("❌ ERROR: BOT_TOKEN not found!")
-        print("Edit .env file and add your bot token")
+        print("❌ ERROR: BOT_TOKEN not found in .env file!")
+        print("Please add your bot token to the .env file:")
+        print("BOT_TOKEN=your_token_here")
+        print("\nEdit the file: nano ~/telegram-download-bot/.env")
         return
     
-    print("=" * 50)
-    print("🤖 Simple Telegram Download Bot")
-    print("✅ No ffmpeg required")
-    print("📁 Max file size: 2GB")
-    print("=" * 50)
-    
+    # Create bot application
     app = Application.builder().token(TOKEN).build()
     
-    # Add handlers
+    # Add command handlers
     app.add_handler(CommandHandler("start", start))
+    
+    # YouTube links handler
     app.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(r'(youtube\.com|youtu\.be)') & ~filters.COMMAND,
         youtube_handler
     ))
+    
+    # Direct links handler (NOT YouTube)
     app.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(r'^https?://') & 
         ~filters.Regex(r'youtube\.com|youtu\.be') & 
         ~filters.COMMAND,
         direct_link_handler
     ))
+    
+    # Button (quality selection) handler
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Error handler
+    # Add error handler
     async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.error(f"Error: {context.error}")
+        logger.error(f"Update {update} caused error {context.error}")
+        if update and update.effective_message:
+            try:
+                await update.effective_message.reply_text("❌ An error occurred. Please try again.")
+            except:
+                pass
     
     app.add_error_handler(error_handler)
     
-    # Start bot
+    # Start the bot
+    print("=" * 50)
+    print("🤖 Telegram Download Bot Starting...")
+    print(f"📁 Max file size: {format_file_size(MAX_SIZE)}")
+    print("🎯 YouTube qualities: Shows estimated file sizes")
+    print("🔗 Direct links: Supported")
+    print("=" * 50)
+    print("Press Ctrl+C to stop the bot")
+    
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
