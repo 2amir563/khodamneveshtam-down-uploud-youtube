@@ -1,6 +1,5 @@
 #!/bin/bash
-# Telegram Download Bot - Complete Installer with Auto-Service
-# GitHub: https://github.com/2amir563/khodamneveshtam-down-uploud-youtube
+# Telegram Download Bot - Complete Installer
 # Run: bash <(curl -s https://raw.githubusercontent.com/2amir563/khodamneveshtam-down-uploud-youtube/main/install.sh)
 
 set -e
@@ -10,381 +9,348 @@ echo "  Telegram Download Bot - Complete Install"
 echo "=========================================="
 echo ""
 
-# Colors
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_step() { echo -e "${BLUE}[→]${NC} $1"; }
-print_success() { echo -e "${GREEN}[✓]${NC} $1"; }
-print_error() { echo -e "${RED}[✗]${NC} $1"; }
-
 # Check if already installed
-print_step "Checking existing installation..."
 if [ -d "$HOME/telegram-download-bot" ]; then
-    print_error "Bot already installed at $HOME/telegram-download-bot"
+    echo "❌ Bot already installed at $HOME/telegram-download-bot"
     echo "To reinstall: rm -rf ~/telegram-download-bot"
     exit 1
 fi
 
-# Step 1: Update system and install dependencies
-print_step "Updating system and installing dependencies..."
-sudo apt update -y > /dev/null 2>&1
-sudo apt install -y python3 python3-pip python3-venv git curl wget ffmpeg > /dev/null 2>&1
+# Step 1: Update and install dependencies
+echo "📦 Installing dependencies..."
+sudo apt update -y
+sudo apt install -y python3 python3-pip python3-venv git curl wget ffmpeg
 
 # Step 2: Create directory
-print_step "Creating bot directory..."
+echo "📁 Creating bot directory..."
 cd ~
+rm -rf telegram-download-bot
 mkdir telegram-download-bot
 cd telegram-download-bot
 
-# Step 3: Download files from your GitHub
-print_step "Downloading bot files from GitHub..."
-curl -s -o requirements.txt https://raw.githubusercontent.com/2amir563/khodamneveshtam-down-uploud-youtube/main/requirements.txt
-curl -s -o .env.example https://raw.githubusercontent.com/2amir563/khodamneveshtam-down-uploud-youtube/main/.env.example
-curl -s -o bot.py https://raw.githubusercontent.com/2amir563/khodamneveshtam-down-uploud-youtube/main/bot.py
+# Step 3: Create files
+echo "📝 Creating files..."
 
-# Step 4: Create .env from example
-cp .env.example .env
+# Create .env
+cat > .env << 'EOF'
+BOT_TOKEN=your_bot_token_here
+OWNER_ID=123456789
+EOF
 
-# Step 5: Setup Python environment
-print_step "Setting up Python environment..."
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip > /dev/null 2>&1
-pip install -r requirements.txt > /dev/null 2>&1
+# Create requirements.txt
+cat > requirements.txt << 'EOF'
+python-telegram-bot[job-queue]==20.7
+yt-dlp>=2024.11.11
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
+requests>=2.31.0
+EOF
 
-# Step 6: Create helper scripts
-print_step "Creating helper scripts..."
+# Create bot.py with fixed code
+cat > bot.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Telegram Download Bot - YouTube + Direct Links
+Fixed Version - No FFmpeg Merge Required
+"""
+
+import os
+import io
+import logging
+import tempfile
+import mimetypes
+import asyncio
+import re
+import math
+from dotenv import load_dotenv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
+)
+import yt_dlp
+import aiohttp
+import requests
+
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_ID", "0")
+MAX_SIZE = 2_000_000_000
+CHUNK_SIZE = 512 * 1024
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Use single file formats only (no merging required)
+QUALITIES = {
+    "144": "best[height<=144]",
+    "240": "best[height<=240]",
+    "360": "best[height<=360]",
+    "480": "best[height<=480]",
+    "720": "best[height<=720]",
+    "1080": "best[height<=1080]",
+    "1440": "best[height<=1440]",
+    "2160": "best[height<=2160]",
+    "best": "best",
+    "audio": "bestaudio[ext=m4a]"
+}
+
+QUALITY_LABELS = {
+    "144": "144p", "240": "240p", "360": "360p", "480": "480p",
+    "720": "720p", "1080": "1080p", "1440": "1440p", "2160": "2160p",
+    "best": "🎬 Best", "audio": "🎵 Audio"
+}
+
+def format_file_size(bytes_size):
+    if bytes_size == 0: return "0 B"
+    size_names = ("B", "KB", "MB", "GB", "TB")
+    i = int(math.floor(math.log(bytes_size, 1024)))
+    return f"{round(bytes_size / math.pow(1024, i), 2)} {size_names[i]}"
+
+def get_quality_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("144p", callback_data="144"), InlineKeyboardButton("240p", callback_data="240")],
+        [InlineKeyboardButton("360p", callback_data="360"), InlineKeyboardButton("480p", callback_data="480")],
+        [InlineKeyboardButton("720p", callback_data="720"), InlineKeyboardButton("1080p", callback_data="1080")],
+        [InlineKeyboardButton("1440p", callback_data="1440"), InlineKeyboardButton("2160p", callback_data="2160")],
+        [InlineKeyboardButton("🎬 Best", callback_data="best"), InlineKeyboardButton("🎵 Audio", callback_data="audio")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 Send me a YouTube link or direct download link!",
+        reply_markup=get_quality_keyboard()
+    )
+
+async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    if not ("youtube.com" in url or "youtu.be" in url):
+        return
+    
+    context.user_data['youtube_url'] = url
+    await update.message.reply_text("Choose quality:", reply_markup=get_quality_keyboard())
+
+async def direct_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    if not url.startswith(("http://", "https://")) or "youtube.com" in url or "youtu.be" in url:
+        return
+    
+    msg = await update.message.reply_text("Downloading...")
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=60) as response:
+                if response.status != 200:
+                    await msg.edit_text("❌ Failed")
+                    return
+                
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
+                downloaded = 0
+                
+                async for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                    if chunk:
+                        temp_file.write(chunk)
+                        downloaded += len(chunk)
+                        if downloaded > MAX_SIZE:
+                            await msg.edit_text("❌ Too large")
+                            temp_file.close()
+                            os.unlink(temp_file.name)
+                            return
+                
+                temp_file.close()
+                
+                filename = url.split('/')[-1].split('?')[0] or "download"
+                with open(temp_file.name, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=update.effective_chat.id,
+                        document=f,
+                        filename=filename,
+                        caption="✅ Downloaded"
+                    )
+                
+                os.unlink(temp_file.name)
+                await msg.edit_text("✅ Done!")
+                
+    except Exception as e:
+        await msg.edit_text(f"❌ Error")
+
+def download_youtube_video(url: str, quality: str):
+    try:
+        ydl_opts = {
+            'format': QUALITIES[quality],
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            title = info.get('title', 'video')
+            
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ydl_opts['outtmpl'] = os.path.join(tmpdir, '%(title)s.%(ext)s')
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
+                    ydl2.download([url])
+                
+                files = [f for f in os.listdir(tmpdir) if not f.endswith('.part')]
+                if not files:
+                    return None, "No file"
+                
+                filename = os.path.join(tmpdir, files[0])
+                buffer = io.BytesIO()
+                with open(filename, 'rb') as f:
+                    buffer.write(f.read())
+                
+                buffer.seek(0)
+                file_size = buffer.getbuffer().nbytes
+                
+                clean_title = re.sub(r'[<>:"/\\|?*]', '_', title)[:50]
+                final_filename = f"{clean_title} - {quality}p.mp4" if quality != 'audio' else f"{clean_title} - audio.m4a"
+                
+                return buffer, final_filename, title, file_size
+                
+    except Exception as e:
+        return None, str(e)
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    quality = query.data
+    url = context.user_data.get('youtube_url')
+    
+    if not url:
+        await query.edit_message_text("❌ Send link first!")
+        return
+    
+    await query.edit_message_text(f"Downloading {quality}...")
+    
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, download_youtube_video, url, quality)
+    
+    if result[0] is None:
+        await query.edit_message_text(f"❌ {result[1]}")
+        return
+    
+    buffer, filename, title, file_size = result
+    
+    if file_size > MAX_SIZE:
+        await query.edit_message_text("❌ Too large")
+        buffer.close()
+        return
+    
+    size_str = format_file_size(file_size)
+    
+    buffer.seek(0)
+    try:
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=buffer,
+            filename=filename,
+            caption=f"{title} - {quality}\nSize: {size_str}"
+        )
+        await query.edit_message_text(f"✅ Done! ({size_str})")
+    except Exception as e:
+        await query.edit_message_text(f"❌ Error")
+    finally:
+        buffer.close()
+
+def main():
+    if not TOKEN:
+        print("❌ Add BOT_TOKEN to .env")
+        return
+    
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'(youtube\.com|youtu\.be)') & ~filters.COMMAND,
+        youtube_handler
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^https?://') & 
+        ~filters.Regex(r'youtube\.com|youtu\.be') & 
+        ~filters.COMMAND,
+        direct_link_handler
+    ))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    
+    print("🤖 Bot starting...")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
+EOF
 
 # Create start.sh
 cat > start.sh << 'EOF'
 #!/bin/bash
-cd "$(dirname "$0")"
+cd ~/telegram-download-bot
 
-echo "================================="
-echo "  Telegram Download Bot"
-echo "================================="
+echo "🤖 Starting Telegram Bot..."
 echo ""
 
-# Check .env file
 if [ ! -f ".env" ]; then
-    echo "❌ ERROR: .env file not found!"
-    echo "Please create .env file: cp .env.example .env"
-    echo "Then edit it: nano .env"
+    echo "❌ .env file not found!"
+    echo "Create: cp .env.example .env"
+    echo "Edit: nano .env"
     exit 1
 fi
 
-# Check if token is set
-if grep -q "BOT_TOKEN=your_bot_token_here" .env || grep -q "BOT_TOKEN=123456789" .env; then
-    echo "❌ ERROR: Please edit .env file!"
-    echo "Add your bot token from @BotFather"
-    echo "Command: nano .env"
+if grep -q "your_bot_token_here" .env; then
+    echo "❌ Add your bot token to .env file"
+    echo "Get from @BotFather"
     exit 1
 fi
 
-# Setup virtual environment
+# Setup Python
 if [ ! -d "venv" ]; then
-    echo "🐍 Setting up Python environment..."
     python3 -m venv venv
     source venv/bin/activate
-    pip install --upgrade pip
     pip install -r requirements.txt
 else
     source venv/bin/activate
 fi
 
-# Start bot
-echo "🚀 Starting bot..."
+# Start
 python3 bot.py
 EOF
 
-# Create service-install.sh
-cat > service-install.sh << 'EOF'
+# Create simple manager
+cat > bot-manager.sh << 'EOF'
 #!/bin/bash
-# Install bot as systemd service (auto-start on reboot)
-
-echo "================================="
-echo "  Installing as System Service"
-echo "================================="
-echo ""
-
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then
-    echo "❌ ERROR: Please run with sudo!"
-    echo "Usage: sudo ./service-install.sh"
-    exit 1
-fi
-
-BOT_DIR="$(pwd)"
-BOT_USER="$(whoami)"
-
-echo "📁 Bot directory: $BOT_DIR"
-echo "👤 Running as user: $BOT_USER"
-echo ""
-
-# Check if bot files exist
-if [ ! -f "$BOT_DIR/bot.py" ]; then
-    echo "❌ ERROR: bot.py not found!"
-    exit 1
-fi
-
-if [ ! -f "$BOT_DIR/.env" ]; then
-    echo "⚠️ WARNING: .env file not found!"
-    echo "Please create .env file before starting service"
-fi
-
-# Create service file
-SERVICE_FILE="/etc/systemd/system/telegram-download-bot.service"
-
-echo "Creating systemd service..."
-cat > $SERVICE_FILE << SERVICE
-[Unit]
-Description=Telegram Download Bot (YouTube + Direct Links)
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$BOT_USER
-WorkingDirectory=$BOT_DIR
-Environment="PATH=$BOT_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=$BOT_DIR/venv/bin/python3 $BOT_DIR/bot.py
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=telegram-download-bot
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-
-# Enable service
-systemctl daemon-reload
-systemctl enable telegram-download-bot.service
-
-echo ""
-echo "✅ Service installed successfully!"
-echo ""
-echo "📋 Management Commands:"
-echo "  Start:    sudo systemctl start telegram-download-bot"
-echo "  Stop:     sudo systemctl stop telegram-download-bot"
-echo "  Status:   sudo systemctl status telegram-download-bot"
-echo "  Restart:  sudo systemctl restart telegram-download-bot"
-echo "  Logs:     sudo journalctl -u telegram-download-bot -f"
-echo ""
-echo "🚀 To start the service now:"
-echo "  sudo systemctl start telegram-download-bot"
-echo ""
-echo "💡 The bot will auto-start on server reboot!"
+echo "Bot Manager:"
+echo "1. Start: ./start.sh"
+echo "2. Stop: pkill -f 'python3 bot.py'"
+echo "3. Check: ps aux | grep 'python3 bot.py'"
 EOF
 
-# Create manager.sh
-cat > manager.sh << 'EOF'
-#!/bin/bash
-# Bot Management Script
+# Step 4: Setup Python
+echo "🐍 Setting up Python..."
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 
-BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVICE="telegram-download-bot"
-
-show_menu() {
-    clear
-    echo "========================================"
-    echo "  Telegram Bot Manager"
-    echo "========================================"
-    echo "1. 📱 Start Bot (manual)"
-    echo "2. 🛑 Stop Bot (manual)"
-    echo "3. ⚙️ Install Auto-Start Service"
-    echo "4. ▶️ Start Service"
-    echo "5. ⏸️ Stop Service"
-    echo "6. 📊 Service Status"
-    echo "7. 📝 View Live Logs"
-    echo "8. 🔄 Restart Service"
-    echo "9. 🔧 Check Bot Files"
-    echo "10. 📥 Update Bot from GitHub"
-    echo "0. ❌ Exit"
-    echo "========================================"
-}
-
-check_status() {
-    if systemctl is-active --quiet $SERVICE 2>/dev/null; then
-        echo -e "Status: \033[0;32mService RUNNING\033[0m"
-    else
-        echo -e "Status: \033[0;31mService STOPPED\033[0m"
-    fi
-}
-
-case $1 in
-    status)
-        sudo systemctl status $SERVICE --no-pager -l 2>/dev/null || echo "Service not installed"
-        ;;
-    logs)
-        sudo journalctl -u $SERVICE -f
-        ;;
-    start)
-        sudo systemctl start $SERVICE
-        ;;
-    stop)
-        sudo systemctl stop $SERVICE
-        ;;
-    restart)
-        sudo systemctl restart $SERVICE
-        ;;
-    *)
-        while true; do
-            show_menu
-            check_status
-            echo ""
-            read -p "Select option [0-10]: " choice
-            
-            case $choice in
-                1)
-                    echo "Starting bot manually..."
-                    cd "$BOT_DIR"
-                    ./start.sh
-                    ;;
-                2)
-                    echo "Stopping bot..."
-                    pkill -f "python3 bot.py" 2>/dev/null
-                    echo "Bot stopped"
-                    sleep 2
-                    ;;
-                3)
-                    echo "Installing auto-start service..."
-                    sudo ./service-install.sh
-                    ;;
-                4)
-                    echo "Starting service..."
-                    sudo systemctl start $SERVICE 2>/dev/null
-                    sleep 2
-                    sudo systemctl status $SERVICE --no-pager -l 2>/dev/null || echo "Service not found"
-                    ;;
-                5)
-                    echo "Stopping service..."
-                    sudo systemctl stop $SERVICE 2>/dev/null
-                    sleep 2
-                    sudo systemctl status $SERVICE --no-pager -l 2>/dev/null || echo "Service not found"
-                    ;;
-                6)
-                    sudo systemctl status $SERVICE --no-pager -l 2>/dev/null || echo "Service not installed"
-                    ;;
-                7)
-                    echo "Showing live logs (Ctrl+C to exit)..."
-                    sudo journalctl -u $SERVICE -f 2>/dev/null || echo "Service not installed"
-                    ;;
-                8)
-                    echo "Restarting service..."
-                    sudo systemctl restart $SERVICE 2>/dev/null
-                    sleep 2
-                    sudo systemctl status $SERVICE --no-pager -l 2>/dev/null || echo "Service not found"
-                    ;;
-                9)
-                    echo "Checking bot files..."
-                    cd "$BOT_DIR"
-                    ls -la
-                    echo ""
-                    if [ -d "venv" ]; then
-                        echo "Python version:"
-                        venv/bin/python3 --version
-                    fi
-                    ;;
-                10)
-                    echo "Updating bot from GitHub..."
-                    cd "$BOT_DIR"
-                    git pull origin main 2>/dev/null || echo "Git not configured"
-                    echo "Update complete. Restart service if needed."
-                    ;;
-                0)
-                    echo "Goodbye! 👋"
-                    exit 0
-                    ;;
-                *)
-                    echo "Invalid option"
-                    ;;
-            esac
-            
-            echo ""
-            read -p "Press Enter to continue..."
-        done
-        ;;
-esac
-EOF
-
-# Create uninstall.sh
-cat > uninstall.sh << 'EOF'
-#!/bin/bash
-# Uninstall script
-
-echo "================================="
-echo "  Uninstalling Telegram Bot"
-echo "================================="
-echo ""
-
-# Stop bot
-echo "Stopping bot..."
-pkill -f "python3 bot.py" 2>/dev/null && echo "Bot stopped."
-
-# Remove service if exists
-if [ -f "/etc/systemd/system/telegram-download-bot.service" ]; then
-    echo "Removing systemd service..."
-    sudo systemctl stop telegram-download-bot.service 2>/dev/null
-    sudo systemctl disable telegram-download-bot.service 2>/dev/null
-    sudo rm -f /etc/systemd/system/telegram-download-bot.service
-    sudo systemctl daemon-reload
-    echo "Service removed."
-fi
-
-# Ask for directory removal
-read -p "Remove bot directory? (y/N): " -n 1 -r
-echo ""
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "Removing directory..."
-    cd ~
-    rm -rf telegram-download-bot
-    echo "Directory removed."
-else
-    echo "Directory kept at ~/telegram-download-bot"
-fi
+# Step 5: Make executable
+chmod +x bot.py start.sh bot-manager.sh
 
 echo ""
-echo "✅ Uninstall complete!"
-EOF
-
-# Step 7: Make scripts executable
-chmod +x bot.py start.sh service-install.sh manager.sh uninstall.sh
-
-print_success "Installation complete!"
+echo "✅ Installation complete!"
 echo ""
-echo "=========================================="
-echo "📋 NEXT STEPS"
-echo "=========================================="
-echo ""
-echo "1. 📝 Edit configuration file:"
+echo "📋 Next steps:"
+echo "1. Edit .env file:"
 echo "   nano ~/telegram-download-bot/.env"
 echo ""
-echo "2. 🔑 Add your bot token (get from @BotFather on Telegram):"
+echo "2. Add your bot token (from @BotFather):"
 echo "   BOT_TOKEN=7123456789:AAHdG6v4p8TeH-8hJk9lM2nOp3QrS5tUvWx"
-echo "   OWNER_ID=123456789"
 echo ""
-echo "3. 🚀 Start the bot (choose one):"
-echo "   Option A - Manual start: ./start.sh"
-echo "   Option B - Auto-start service: sudo ./service-install.sh"
+echo "3. Start bot:"
+echo "   cd ~/telegram-download-bot"
+echo "   ./start.sh"
 echo ""
-echo "4. ⚙️ After installing service, start it:"
-echo "   sudo systemctl start telegram-download-bot"
-echo ""
-echo "=========================================="
-echo "🔧 Management Commands"
-echo "=========================================="
-echo "Start manually:     ./start.sh"
-echo "Install service:    sudo ./service-install.sh"
-echo "Check status:       sudo systemctl status telegram-download-bot"
-echo "View logs:          sudo journalctl -u telegram-download-bot -f"
-echo "Use manager:        ./manager.sh"
-echo "Uninstall:          ./uninstall.sh"
-echo ""
-echo "🚀 Bot will auto-start on server reboot!"
-echo "=========================================="
+echo "🚀 Bot is ready!"
