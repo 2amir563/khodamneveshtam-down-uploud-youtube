@@ -76,7 +76,7 @@ def format_file_size(bytes_size):
     return f"{s} {size_names[i]}"
 
 def get_quality_keyboard():
-    """Create quality selection keyboard"""
+    """Create quality selection keyboard (for start command)"""
     keyboard = [
         [InlineKeyboardButton(f"{QUALITY_LABELS['144']}", callback_data="144"),
          InlineKeyboardButton(f"{QUALITY_LABELS['240']}", callback_data="240")],
@@ -191,7 +191,7 @@ async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         quality_sizes["audio"] = filesize
                         break
             
-            # Create keyboard with sizes - این بخش اصلاح شده
+            # Create keyboard with sizes - **این بخش اصلاح شده**
             keyboard = []
             quality_order = ["144", "240", "360", "480", "720", "1080", "1440", "2160", "best", "audio"]
             
@@ -202,21 +202,21 @@ async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if size_est:
                         size_str = format_file_size(size_est)
-                        # اصلاح برچسب دکمه‌ها برای نمایش حجم
+                        # **نمایش حجم در دکمه**
                         if quality_key == "best":
-                            label = f"🎬 Best\n({size_str})"
+                            label = f"🎬 Best\n{size_str}"
                         elif quality_key == "audio":
-                            label = f"🎵 Audio\n({size_str})"
+                            label = f"🎵 Audio\n{size_str}"
                         else:
-                            label = f"{QUALITY_LABELS[quality_key]}\n({size_str})"
+                            label = f"{QUALITY_LABELS[quality_key]}\n{size_str}"
                     else:
                         # اگر حجم تخمینی موجود نبود
                         if quality_key == "best":
-                            label = f"🎬 Best\n(اندازه نامعلوم)"
+                            label = f"🎬 Best\n❓"
                         elif quality_key == "audio":
-                            label = f"🎵 Audio\n(اندازه نامعلوم)"
+                            label = f"🎵 Audio\n❓"
                         else:
-                            label = f"{QUALITY_LABELS[quality_key]}\n(اندازه نامعلوم)"
+                            label = f"{QUALITY_LABELS[quality_key]}\n❓"
                     
                     row.append(InlineKeyboardButton(label, callback_data=quality_key))
                     
@@ -232,21 +232,7 @@ async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Show video info
             info_text = f"🎬 **{title}**\n"
             info_text += f"⏱️ Duration: {duration_min} minutes\n\n"
-            info_text += "📊 Available qualities:\n"
-            
-            for quality_key in quality_order:
-                if quality_key in quality_sizes:
-                    size_est = quality_sizes[quality_key]
-                    size_str = format_file_size(size_est)
-                    
-                    if quality_key == "best":
-                        info_text += f"• 🎬 Best: ~{size_str}\n"
-                    elif quality_key == "audio":
-                        info_text += f"• 🎵 Audio: ~{size_str}\n"
-                    else:
-                        info_text += f"• {QUALITY_LABELS[quality_key]}: ~{size_str}\n"
-            
-            info_text += "\nSelect quality (size estimated):"
+            info_text += "📊 Select quality (estimated size):"
             
             await message.edit_text(
                 info_text,
