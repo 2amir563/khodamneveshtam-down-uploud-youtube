@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram Download Bot - YouTube + Direct Links
-راه‌حل مطمئن برای نمایش حجم همه کیفیت‌ها
+با نمایش حجم برای همه کیفیت‌ها
 """
 
 import os
@@ -93,7 +93,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
 async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle YouTube links - راه‌حل مطمئن برای نمایش حجم"""
+    """Handle YouTube links - نمایش حجم برای همه کیفیت‌ها"""
     url = update.message.text.strip()
     
     if not ("youtube.com" in url or "youtu.be" in url):
@@ -118,101 +118,75 @@ async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             duration_sec = info.get('duration', 0)
             duration_min = duration_sec // 60
             
-            # Get video filesize for estimation
-            video_size = info.get('filesize') or info.get('filesize_approx')
-            if not video_size:
-                # Try to estimate from formats
-                formats = info.get('formats', [])
-                for fmt in formats:
-                    if fmt.get('filesize'):
-                        video_size = fmt.get('filesize')
-                        break
-                    elif fmt.get('filesize_approx'):
-                        video_size = fmt.get('filesize_approx')
-                        break
+            # روش جدید: همیشه حجم را محاسبه کن
+            # فرمول: حجم = مدت (دقیقه) × ضریب کیفیت × 1MB
             
-            # اگر حجم اصلی پیدا نشد، تخمین بزن بر اساس مدت
-            if not video_size and duration_sec > 0:
-                # تخمین: 1 دقیقه ≈ 10MB برای کیفیت متوسط
-                video_size = int(duration_sec / 60 * 10 * 1024 * 1024)
+            # ضرایب حجم برای هر کیفیت (بر اساس MB در دقیقه)
+            size_per_minute = {
+                "144": 0.5,    # 0.5 MB در دقیقه
+                "240": 1.0,    # 1.0 MB در دقیقه
+                "360": 2.0,    # 2.0 MB در دقیقه
+                "480": 3.0,    # 3.0 MB در دقیقه
+                "720": 5.0,    # 5.0 MB در دقیقه
+                "1080": 8.0,   # 8.0 MB در دقیقه
+                "1440": 12.0,  # 12.0 MB در دقیقه
+                "2160": 20.0,  # 20.0 MB در دقیقه
+                "best": 10.0,  # 10.0 MB در دقیقه
+                "audio": 0.5   # 0.5 MB در دقیقه
+            }
             
             # محاسبه حجم برای همه کیفیت‌ها
             quality_sizes = {}
-            
-            if video_size:
-                base_size = video_size
-                # نسبت‌های تخمین بر اساس کیفیت
-                size_ratios = {
-                    "144": 0.15,   # 15% از حجم اصلی
-                    "240": 0.25,   # 25% از حجم اصلی
-                    "360": 0.40,   # 40% از حجم اصلی
-                    "480": 0.60,   # 60% از حجم اصلی
-                    "720": 0.85,   # 85% از حجم اصلی
-                    "1080": 1.0,   # 100% از حجم اصلی
-                    "1440": 1.5,   # 150% از حجم اصلی
-                    "2160": 2.5,   # 250% از حجم اصلی
-                    "best": 1.2,   # 120% از حجم اصلی
-                    "audio": 0.08  # 8% از حجم اصلی (فقط صدا)
-                }
+            for quality, mb_per_min in size_per_minute.items():
+                # حجم = مدت (دقیقه) × MB در دقیقه × 1024×1024 (تبدیل به بایت)
+                estimated_size = int(duration_min * mb_per_min * 1024 * 1024)
                 
-                for quality, ratio in size_ratios.items():
-                    quality_sizes[quality] = int(base_size * ratio)
-            
-            # اگر تخمین هم کار نکرد، مقادیر پیش‌فرض
-            if not quality_sizes:
-                default_sizes = {
-                    "144": 2 * 1024 * 1024,      # 2MB
-                    "240": 5 * 1024 * 1024,      # 5MB
-                    "360": 10 * 1024 * 1024,     # 10MB
-                    "480": 20 * 1024 * 1024,     # 20MB
-                    "720": 40 * 1024 * 1024,     # 40MB
-                    "1080": 80 * 1024 * 1024,    # 80MB
-                    "1440": 120 * 1024 * 1024,   # 120MB
-                    "2160": 200 * 1024 * 1024,   # 200MB
-                    "best": 100 * 1024 * 1024,   # 100MB
-                    "audio": 3 * 1024 * 1024     # 3MB
-                }
+                # حداقل و حداکثر حجم
+                if estimated_size < 1 * 1024 * 1024:  # کمتر از 1MB
+                    estimated_size = 1 * 1024 * 1024
+                elif estimated_size > 500 * 1024 * 1024:  # بیشتر از 500MB
+                    estimated_size = 500 * 1024 * 1024
                 
-                # تطبیق با مدت ویدیو
-                if duration_sec > 0:
-                    duration_factor = duration_sec / 60  # فاکتور بر اساس دقیقه
-                    for quality in default_sizes:
-                        default_sizes[quality] = int(default_sizes[quality] * duration_factor)
-                
-                quality_sizes = default_sizes
+                quality_sizes[quality] = estimated_size
             
-            # ایجاد کیبورد با حجم - همیشه حجم نمایش داده می‌شود
+            # ایجاد کیبورد - همیشه حجم نمایش داده می‌شود
             keyboard = []
-            quality_order = ["144", "240", "360", "480", "720", "1080", "1440", "2160", "best", "audio"]
-            
-            # گروه‌بندی دکمه‌ها
-            groups = [
-                ["144", "240"],
-                ["360", "480"],
-                ["720", "1080"],
-                ["1440", "2160"],
-                ["best", "audio"]
+            quality_pairs = [
+                ("144", "240"),
+                ("360", "480"),
+                ("720", "1080"),
+                ("1440", "2160"),
+                ("best", "audio")
             ]
             
-            for group in groups:
+            for q1, q2 in quality_pairs:
                 row = []
-                for quality_key in group:
-                    if quality_key in QUALITY_LABELS:
-                        size_est = quality_sizes.get(quality_key, 0)
-                        size_str = format_file_size(size_est)
-                        
-                        # نمایش حجم در یک خط کنار کیفیت
-                        if quality_key == "best":
-                            label = f"🎬 Best ({size_str})"
-                        elif quality_key == "audio":
-                            label = f"🎵 Audio ({size_str})"
-                        else:
-                            label = f"{QUALITY_LABELS[quality_key]} ({size_str})"
-                        
-                        row.append(InlineKeyboardButton(label, callback_data=quality_key))
                 
-                if row:
-                    keyboard.append(row)
+                # دکمه اول
+                size1 = quality_sizes.get(q1, 0)
+                size_str1 = format_file_size(size1)
+                if q1 == "best":
+                    label1 = f"🎬 Best ({size_str1})"
+                elif q1 == "audio":
+                    label1 = f"🎵 Audio ({size_str1})"
+                else:
+                    label1 = f"{QUALITY_LABELS[q1]} ({size_str1})"
+                
+                row.append(InlineKeyboardButton(label1, callback_data=q1))
+                
+                # دکمه دوم
+                size2 = quality_sizes.get(q2, 0)
+                size_str2 = format_file_size(size2)
+                if q2 == "best":
+                    label2 = f"🎬 Best ({size_str2})"
+                elif q2 == "audio":
+                    label2 = f"🎵 Audio ({size_str2})"
+                else:
+                    label2 = f"{QUALITY_LABELS[q2]} ({size_str2})"
+                
+                row.append(InlineKeyboardButton(label2, callback_data=q2))
+                
+                keyboard.append(row)
             
             custom_keyboard = InlineKeyboardMarkup(keyboard)
             
@@ -431,15 +405,13 @@ def main():
     logger.info("🤖 Bot starting...")
     print("=" * 60)
     print("🤖 Telegram Download Bot Started!")
-    print("📊 **با نمایش حجم برای همه کیفیت‌ها**")
+    print("📊 **با نمایش حجم برای همه 10 کیفیت**")
     print("=" * 60)
-    print("✨ Features:")
-    print("  • نمایش حجم تخمینی برای همه 10 کیفیت")
+    print("✨ ویژگی‌ها:")
+    print("  • نمایش حجم تخمینی برای همه کیفیت‌ها")
+    print("  • محاسبه خودکار بر اساس مدت ویدیو")
     print("  • دانلود از یوتیوب و لینک مستقیم")
     print("  • حداکثر حجم 2GB")
-    print("=" * 60)
-    print("⚠️  توجه: اعداد نمایش داده شده تخمینی هستند")
-    print("حجم واقعی ممکن است متفاوت باشد")
     print("=" * 60)
     
     app.run_polling(drop_pending_updates=True)
