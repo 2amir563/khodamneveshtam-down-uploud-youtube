@@ -27,6 +27,7 @@ nano .env
 
 bash
 ```
+cd ~/telegram-download-bot
 ./start.sh
 ```
 تمام! ربات شما آماده استفاده است. 🚀
