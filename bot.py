@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram Download Bot - YouTube + Direct Links
-With File Size Display - FFmpeg Free Version
+FFmpeg Fixed Version
 GitHub: https://github.com/2amir563/khodamneveshtam-down-uploud-youtube
 """
 
@@ -36,16 +36,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# YouTube quality options - SIMPLIFIED (no ffmpeg merging)
+# YouTube quality options - FIXED: Use pre-merged formats only
 QUALITIES = {
-    "144": "best[height<=144]",
-    "240": "best[height<=240]",
-    "360": "best[height<=360]",
-    "480": "best[height<=480]",
-    "720": "best[height<=720]",
-    "1080": "best[height<=1080]",
-    "1440": "best[height<=1440]",
-    "2160": "best[height<=2160]",
+    "144": "best[height<=144]/best",
+    "240": "best[height<=240]/best",
+    "360": "best[height<=360]/best",
+    "480": "best[height<=480]/best",
+    "720": "best[height<=720]/best",
+    "1080": "best[height<=1080]/best",
+    "1440": "best[height<=1440]/best",
+    "2160": "best[height<=2160]/best",
     "best": "best",
     "audio": "bestaudio[ext=m4a]/bestaudio"
 }
@@ -147,6 +147,7 @@ async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             formats = info.get('formats', [])
             quality_sizes = {}
             
+            # Find pre-merged formats (with both video and audio)
             for fmt in formats:
                 height = fmt.get('height')
                 filesize = fmt.get('filesize') or fmt.get('filesize_approx')
@@ -154,34 +155,41 @@ async def youtube_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not height or not filesize:
                     continue
                 
-                # Map to our quality keys
-                if height <= 144:
-                    quality_key = "144"
-                elif height <= 240:
-                    quality_key = "240"
-                elif height <= 360:
-                    quality_key = "360"
-                elif height <= 480:
-                    quality_key = "480"
-                elif height <= 720:
-                    quality_key = "720"
-                elif height <= 1080:
-                    quality_key = "1080"
-                elif height <= 1440:
-                    quality_key = "1440"
-                elif height <= 2160:
-                    quality_key = "2160"
-                else:
-                    quality_key = "best"
-                
+                # Only consider formats that already have audio (vcodec and acodec both not 'none')
+                if fmt.get('vcodec') != 'none' and fmt.get('acodec') != 'none':
+                    # Map to our quality keys
+                    if height <= 144:
+                        quality_key = "144"
+                    elif height <= 240:
+                        quality_key = "240"
+                    elif height <= 360:
+                        quality_key = "360"
+                    elif height <= 480:
+                        quality_key = "480"
+                    elif height <= 720:
+                        quality_key = "720"
+                    elif height <= 1080:
+                        quality_key = "1080"
+                    elif height <= 1440:
+                        quality_key = "1440"
+                    elif height <= 2160:
+                        quality_key = "2160"
+                    else:
+                        quality_key = "best"
+                    
+                    # Store size
+                    if quality_key not in quality_sizes:
+                        quality_sizes[quality_key] = filesize
+                    elif filesize < quality_sizes[quality_key]:
+                        quality_sizes[quality_key] = filesize
+            
+            # For audio formats
+            for fmt in formats:
                 if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                    quality_key = "audio"
-                
-                # Store size
-                if quality_key not in quality_sizes:
-                    quality_sizes[quality_key] = filesize
-                elif filesize < quality_sizes[quality_key]:
-                    quality_sizes[quality_key] = filesize
+                    filesize = fmt.get('filesize') or fmt.get('filesize_approx')
+                    if filesize:
+                        quality_sizes["audio"] = filesize
+                        break
             
             # Create keyboard with sizes
             keyboard = []
@@ -344,7 +352,7 @@ async def direct_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await message.edit_text(f"❌ Error: {str(e)[:100]}")
 
 def download_youtube_video(url: str, quality: str):
-    """Download YouTube video - SIMPLIFIED (no ffmpeg)"""
+    """Download YouTube video - FIXED: Only use pre-merged formats"""
     try:
         format_str = QUALITIES.get(quality, "best")
         
@@ -358,10 +366,8 @@ def download_youtube_video(url: str, quality: str):
             'no_color': True,
         }
         
-        # For audio, use m4a format
-        if quality == 'audio':
-            ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio'
-            ydl_opts['postprocessors'] = []
+        # IMPORTANT: Don't use merge_output_format to avoid ffmpeg requirement
+        # Use formats that already have both video and audio
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -382,7 +388,7 @@ def download_youtube_video(url: str, quality: str):
                     # Find the actual file
                     if not os.path.exists(filename):
                         files = [f for f in os.listdir(tmpdir) 
-                                if not f.endswith('.part') and f.endswith(('.mp4', '.m4a', '.webm', '.mkv'))]
+                                if not f.endswith('.part')]
                         if files:
                             filename = os.path.join(tmpdir, files[0])
                         else:
@@ -492,6 +498,13 @@ def main():
     # Error handler
     async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Update {update} caused error {context.error}")
+        # Don't show error message to user for conflict errors
+        if "Conflict" not in str(context.error):
+            if update and update.effective_message:
+                try:
+                    await update.effective_message.reply_text("❌ An error occurred. Please try again.")
+                except:
+                    pass
     
     app.add_error_handler(error_handler)
     
@@ -499,11 +512,10 @@ def main():
     logger.info("🤖 Bot starting...")
     print("=" * 50)
     print("Telegram Download Bot Started!")
-    print("Service: telegram-download-bot")
-    print("Check logs: sudo journalctl -u telegram-download-bot -f")
     print("=" * 50)
     
-    app.run_polling(drop_pending_updates=True)
+    # Add drop_pending_updates to avoid conflict
+    app.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == "__main__":
     main()
