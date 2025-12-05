@@ -11,31 +11,52 @@ bot.py - کد اصلی ربات
 
 🚀 دستور نصب نهایی (فقط این یک دستور را در سرور اجرا کنید):
 bash
+```
 bash <(curl -s https://raw.githubusercontent.com/2amir563/khodamneveshtam-down-uploud-youtube/main/install.sh)
+```
+
 ✅ بعد از نصب:
 1. تنظیم توکن ربات:
 bash
+```
 nano ~/telegram-download-bot/.env
-2. نصب سرویس auto-start (اگر به صورت خودکار نصب نشد):
+```
+3. نصب سرویس auto-start (اگر به صورت خودکار نصب نشد):
 bash
+```
 cd ~/telegram-download-bot
 sudo ./service-install.sh
-3. شروع سرویس:
+```
+5. شروع سرویس:
 bash
+```
 sudo systemctl start telegram-download-bot
-4. بررسی وضعیت:
+```
+7. بررسی وضعیت:
 bash
+```
 sudo systemctl status telegram-download-bot
+```
 🔧 مدیریت ربات:
 bash
 # استفاده از منیجر (راحت‌تر)
+
+```
 cd ~/telegram-download-bot
 ./manager.sh
+```
 
 # یا دستورات مستقیم
+
+```
 sudo systemctl status telegram-download-bot
+```
+```
 sudo journalctl -u telegram-download-bot -f
+```
+```
 sudo systemctl restart telegram-download-bot
+```
 🎯 ویژگی‌های این نسخه:
 نصب کامل با یک دستور
 
